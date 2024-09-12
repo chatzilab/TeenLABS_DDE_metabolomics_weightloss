@@ -1,0 +1,217 @@
+---
+title: "DDE and Transcriptomics in Adipose Tissue"
+author: "Zhenjiang Li"
+date: today
+toc: true
+toc_expand: 2
+format: 
+  html:
+    code-fold: true
+    html-math-method: katex
+    fontsize: 16pt
+    grid:
+      sidebar-width: 0px
+      body-width: 1500px
+      margin-width: 500px
+      gutter-width: 1.5rem
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Environment Setup {.hidden}
+
+```{=html}
+<style type="text/css">
+caption, .table-caption {
+  text-align: left;
+}
+</style>
+```
+```{r}
+#| echo: false
+
+options(scipen=999)
+
+source(here::here("!libraries.R"))
+source(here::here("!functions.R"))
+source(here::here("!directories.R"))
+source(here::here("!load_data.R"))
+```
+
+## Model Parameters
+
+```{r}
+outcome <- c("bmi", "uwaist")
+exposure <- "dde_cat_num"
+covariates <- c("age_baseline", "sex", "race_binary", "parents_income_new", "site")
+```
+
+## Preprocess Working Data
+
+```{r}
+#| message: false
+
+source(here::here("0_preprocess data.R"))
+```
+
+## Differentially-Expressed Genes Associated with DDE exposure
+
+The raw counts of RNA sequence had been preprocessed to remove lowly-expressed genes and genes on chromosome X and Y. As a result, there were `r dim(RNAseq)[1]` mRNAs entering the downstream analysis.
+
+```{r}
+#| fig-cap: "**Figure 1.** Voom plot."
+
+model <- as.formula(paste0(
+  " ~ ",
+  exposure, " + ",
+  paste(covariates, collapse = " + ")
+))
+model_matrix <- model.matrix(
+  model, data = RNAseq$metadata
+)
+v <- voom(
+  RNAseq[,as.numeric(rownames(model_matrix))],
+  design = model_matrix,
+  plot = T)
+```
+
+```{r}
+fit <- lmFit(v, model_matrix)
+fit <- eBayes(fit)
+top_table <- topTable(fit,
+                      coef = 2,
+                      sort.by = "p", n = Inf,
+                      adjust.method = "BH")
+```
+
+```{r}
+#| tbl-cap: "**Table 1.** The top 10 mRNA with lowest p-values associated with DDE exposrue."
+#| tbl-cap-location: top
+
+top_table %>% 
+  dplyr::top_n(P.Value, n = -10) %>% 
+  dplyr::select(chromosome_name,
+                external_gene_name,
+                gene_biotype,
+                logFC:adj.P.Val) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+```{r}
+#| fig-cap: "**Figure 2.** Volcano plot of log fold change verse log p-value."
+#| warning: false
+
+plot_input <- top_table %>%
+  dplyr::mutate(
+    top_10 = if_else(1:n() <= 10, "Yes", "No"),
+    significance = case_when(
+      P.Value < 0.01 ~ "p value < 0.01",
+      P.Value >= 0.01 & P.Value < 0.05 ~ "p value < 0.05",
+      TRUE ~ "Null"
+      ),
+    label = if_else(top_10 == "Yes", as.character(external_gene_name), NA))
+
+mycolors <- c("red", "blue", "grey")
+names(mycolors) <- c("p value < 0.01", "p value < 0.05", "Null")
+
+volcano_plot <- ggplot(
+  data = plot_input,
+  aes(x = logFC, y = -log10(P.Value), col = significance, label = label)) + 
+  geom_point() +
+  ylab(expression(-log[10]~"(p)")) +
+  xlab(expression("log2 fold change")) +
+  theme_classic() +
+  geom_text_repel(max.overlaps = Inf)  +
+  scale_colour_manual(values = mycolors) +
+  # labs(title = "Volcano plot for the adjusted associations of PFHpA with metabolomics") +
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(size = 15, family = "Arial"))
+
+volcano_plot
+```
+
+### PCA-based multiple comparison correction
+
+```{r}
+# Perform PCA for RNAseq
+pca_RNAseq <- prcomp(RNAseq)
+
+# Calculate eigenvalues
+eigenvalues_RNAseq <- pca_RNAseq$sdev^2
+
+# Determine the effective number of tests using the Kaiser-Guttman rule
+M_eff_RNAseq <- sum(eigenvalues_RNAseq > 1) #163
+
+# Adjust the significance threshold
+q_value_thres <- 0.05/M_eff_RNAseq
+```
+
+```{r}
+#| tbl-cap: "**Table 2.** The mRNA associated with DDE exposrue after PCA-based multiple testing correction."
+#| tbl-cap-location: top
+
+top_table %>% 
+  dplyr::filter(P.Value < q_value_thres) %>% 
+  dplyr::select(chromosome_name,
+                external_gene_name,
+                gene_biotype,
+                logFC:adj.P.Val) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+```{r}
+#| eval: false
+
+sig_genes <- top_table %>% 
+  dplyr::top_n(P.Value, n = -10) %>% 
+  dplyr::select(chromosome_name,
+                external_gene_name,
+                gene_biotype,
+                logFC:adj.P.Val) 
+
+saveRDS(
+  sig_genes,
+  fs::path(
+    dir_project,
+    "1_scripts",
+    "0_temporary_data",
+    "sig_genes_with_DDE_num.rds"
+  )
+)
+```
+
+## Tryptophan Metabolism
+```{r}
+target_pathway <- "Tryptophan"
+
+kegg_pathway <- getKEGGPathwayNames("hsa")
+pathway_id <- kegg_pathway[grep(target_pathway, kegg_pathway$Description),]$PathwayID
+
+gene_list <- getGeneKEGGLinks("hsa")
+gene_list$Symbol <- mapIds(
+  org.Hs.eg.db,
+  gene_list$GeneID,
+  column = "SYMBOL",
+  keytype = "ENTREZID"
+)
+gene_list_target <- gene_list %>% 
+  dplyr::filter(PathwayID == pathway_id)
+```
+
+```{r}
+target_results <- top_table %>% 
+  dplyr::filter(external_gene_name %in% gene_list_target$Symbol)
+
+target_results %>%
+  dplyr::select(chromosome_name,
+                external_gene_name,
+                gene_biotype,
+                logFC:adj.P.Val) %>% 
+  kbl() %>% 
+  kable_classic()
+```
