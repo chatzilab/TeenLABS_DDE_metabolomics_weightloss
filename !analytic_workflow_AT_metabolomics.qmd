@@ -1,0 +1,309 @@
+---
+title: "Adipose Tissue Metabolomics Data"
+subtitle: "Relationships with DDE and plasma metabolomics"
+author: "Zhenjiang Li"
+date: today
+toc: true
+format: 
+  html:
+    code-fold: true
+    html-math-method: katex
+    fontsize: 16pt
+    grid:
+      sidebar-width: 0px
+      body-width: 1500px
+      margin-width: 500px
+      gutter-width: 1.5rem
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Environment Setup {.hidden}
+
+```{r}
+
+options(scipen=999)
+
+source(here::here("!libraries.R"))
+source(here::here("!functions.R"))
+source(here::here("!directories.R"))
+```
+
+```{r}
+#| label: shorten-long-path
+#| include: false
+
+if(nchar(dir_data) > 80)
+{
+  system("subst x: /D")
+  short_cut <- dir_home %>% dirname
+  system(paste0("subst x: \"", short_cut, "\""))
+  
+  dir_list <- list(
+    dir_home = dir_home,
+    dir_project = dir_project,
+    dir_data = dir_data,
+    dir_report = dir_report,
+    dir_figure = dir_figure,
+    dir_temp_data = dir_temp_data
+  )
+  
+  dir_list_shortened <- lapply(
+    dir_list,
+    function(y) create_shortcut(y, short_cut, "x")
+  )
+  list2env(dir_list_shortened, envir = .GlobalEnv)  
+}
+
+source(here::here("!load_data.R"))
+source(here::here("!preprocess_data.R"))
+```
+
+## Setup Analysis Parameters
+
+```{r}
+platforms <- names(data_abundance)
+
+exposure <- "dde_cat_num"
+covariates <- c("age_baseline", "sex", "race_binary", "parents_income_new", "site")
+
+p_cutoff_sig_feat <- 0.05
+q_cutoff_sig_feat <- 0.05
+```
+
+## DDE \~ AT metabolomics
+
+```{r}
+#| label: focus on confirmed metabolites
+
+feat_annot_l_AT_endo_l1 <- modify(
+  feat_annot_l_AT,
+  ~ .x %>% 
+    filter(type == "Endogenous") %>% 
+    filter(!is.na(name_l1))
+)
+
+data_AT_metabo_endo_l1 <- modify2(
+  data_AT_metabo,
+  feat_annot_l_AT_endo_l1,
+  ~ .x %>% 
+    select(key, any_of(.y$key))
+)
+```
+
+```{r}
+lm_DDE_AT_covars_output <- modify(
+  data_AT_metabo_endo_l1,
+  ~ owas(
+    df = inner_join(
+      data %>% filter(visit == 0),
+      .x,
+      by = "key"
+    ),
+    var = exposure,
+    omics = colnames(.x)[-1],
+    var_exposure_or_outcome = "exposure",
+    covars = covariates,
+    conf_int = T
+  )
+)
+
+lm_DDE_AT_covars_output <- modify2(
+  lm_DDE_AT_covars_output,
+  feat_annot_l_AT_endo_l1,
+  ~ .x %>% 
+    mutate(p_adjust = p.adjust(p_value, method = "BH"),
+           name = .y$name[match(feature_name,.y$key)])
+)
+
+lm_DDE_AT_covars_output_sig <- modify(
+  lm_DDE_AT_covars_output,
+  ~ .x %>% 
+    filter(p_value < 0.05)
+)
+lm_DDE_AT_covars_output_sig <- modify2(
+  lm_DDE_AT_covars_output_sig,
+  names(lm_DDE_AT_covars_output_sig),
+  ~ cbind(.x, mode = .y)
+)
+lm_DDE_AT_covars_output_sig <- lm_DDE_AT_covars_output_sig %>%
+  bind_rows() %>% as_tibble() %>%
+  dplyr::group_by(name) %>%
+  top_n(1) %>% ungroup
+```
+
+```{r}
+#| include: false
+
+sig_AT_feats_DDE_num <- lm_DDE_AT_covars_output_sig %>% 
+  dplyr::select(-var_name)
+
+saveRDS(
+  sig_AT_feats_DDE_num,
+  fs::path(
+    dir_temp_data,
+    "sig_AT_feats_with_DDE_num.rds"
+  )
+)
+```
+
+```{r}
+#| label: PCA-based method does not work, no one found.
+#| eval: false
+
+pca_AT_metabo <- lapply(
+  data_AT_metabo_endo_l1,
+  function(x)
+    prcomp(x[,-1])
+)
+
+eigenvalues_AT_metabo <- lapply(
+  pca_AT_metabo,
+  function(x)
+    x$sdev^2
+)
+
+M_eff_AT_metabo <- lapply(
+  eigenvalues_AT_metabo,
+  function(x)
+    sum(x > 1)
+)
+
+q_cutoff_sig_feat_PCA <- 0.05/unlist(M_eff_AT_metabo)
+```
+
+```{r}
+lm_DDE_AT_covars_output_sig %>% 
+  dplyr::select(mode, name, estimate, conf_low, conf_high, p_value, adjusted_pval) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+## Selected AT Metabolites \~ Plasma Metabolomics
+
+```{r}
+#| label: create feature table for Selected AT metabolites
+
+data_AT_metabo_select <- modify2(
+  data_AT_metabo_endo_l1,
+  names(data_AT_metabo_endo_l1),
+  ~ .x %>% 
+    select(key, all_of(lm_DDE_AT_covars_output_sig$feature_name[which(lm_DDE_AT_covars_output_sig$mode == .y)]))
+)
+data_AT_metabo_select <- Reduce(
+  function(x,y) left_join(x, y, by = "key"),
+  data_AT_metabo_select)
+```
+
+```{r}
+#| label: Run LMM for selected vAT metabolites and plasma metabolites
+#| eval: false
+
+source(fs::path(dir_project, "1_scripts", "16_vAT feats & plasma feats.R"))
+```
+
+```{r}
+lmm_AT_plasma_covars_output <- readRDS(
+  fs::path(
+    dir_project,
+    "1_scripts",
+    "0_temporary_data",
+    "model_statistics_vAT_plasma_selected.rds"
+  )
+)
+```
+
+```{r}
+lmm_AT_plasma_covars_output_sig <- modify(
+  lmm_AT_plasma_covars_output,
+  ~ .x %>% 
+    dplyr::group_by(period) %>% 
+    mutate(
+      p_adjust_interaction = p.adjust(pvalue_interaction, method = "BH"),
+      p_adjust = p.adjust(pvalue, method = "BH")) %>%
+    ungroup() %>% 
+    filter(p_adjust_interaction < 0.05)
+)
+lmm_AT_plasma_covars_output_sig <- lmm_AT_plasma_covars_output_sig %>% 
+  bind_rows() %>% as_tibble()
+
+lmm_AT_plasma_covars_output_sig$name_AT <- with(
+  lmm_AT_plasma_covars_output_sig,
+  lm_DDE_AT_covars_output_sig$name[match(var, lm_DDE_AT_covars_output_sig$feature_name)])
+
+lmm_AT_plasma_covars_output_sig$name_plasma <- with(
+  lmm_AT_plasma_covars_output_sig,
+  feat_annot_l_plasma_endo_l1$Metabolite_Name[match(feature_name, feat_annot_l_plasma_endo_l1$`colnames(x)`)]
+)
+
+lmm_AT_plasma_covars_output_sig <- lmm_AT_plasma_covars_output_sig %>% 
+  select(var, feature_name, name_AT, name_plasma, period, everything())
+```
+
+```{r}
+#| include: false
+
+saveRDS(
+  lmm_AT_plasma_covars_output_sig,
+  fs::path(
+    dir_temp_data,
+    "sig_plasma_feats_with_AT_feats.rds"
+  )
+)
+```
+
+```{r}
+#| label: sample plot
+
+plot_input <- lmm_AT_plasma_covars_output_sig %>% 
+  filter(name_AT == "5-Hydroxy-L-Tryptophan") %>% 
+  filter(name_plasma %in% c("Orotate", "Tryptophan", "[C20.4]-Arachidonic acid", "[C20.3]-5Z,8Z,11Z Eicosatrienoic acid", "[C19.1]-10Z-Nonadecenoic acid", "[C18.1]-17-Octadecynoic acid", "[C18.1]-11-Octadecenoic acid", "[C10.1]-9-Decenoic acid")) %>% 
+  filter(feature_name != "169.1234562_66.39674805")
+plot_input <- add_CI(plot_input)
+
+ggplot(plot_input, aes(x = period)) +
+  geom_point(aes(y = coef_num), shape = 21, size = 4) +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound, color = period), width = 0.3, alpha= 0.7, linewidth = 1.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  scale_x_discrete(labels = c("1st year", "1st-3rd years")) +
+  scale_color_manual(values = c("#377eb8", "#e41a1c")) +
+  scale_fill_manual(values = c("#377eb8", "#e41a1c")) +
+  facet_grid(~name_plasma) +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  theme_classic() +
+  theme(plot.margin = unit(c(1, 1, 1, 1), "lines"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans"),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 15),
+        # axis.text.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        strip.text = element_text(size=15),
+        legend.position = "none")
+
+plot_input_5HTP <- add_CI(lm_DDE_AT_covars_output_sig) %>% 
+    filter(name == "5-Hydroxy-L-Tryptophan")
+
+ggplot(plot_input_5HTP, aes(x = name)) +
+  geom_point(aes(y = coef_num), shape = 21, size = 4) +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound), width = 0.3, alpha= 0.7, linewidth = 1.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  theme_classic() +
+  theme(plot.margin = unit(c(1, 1, 1, 1), "lines"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans"),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 15),
+        # axis.text.x = element_blank(),
+        # axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        strip.text = element_text(size=15),
+        legend.position = "none")
+```
