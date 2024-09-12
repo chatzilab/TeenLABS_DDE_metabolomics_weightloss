@@ -1,0 +1,1499 @@
+---
+title: "Manuscript preparation"
+author: "Zhenjiang Li"
+date: today
+toc: true
+toc_expand: 2
+format: 
+  html:
+    code-fold: true
+    html-math-method: katex
+    fontsize: 16pt
+    grid:
+      sidebar-width: 0px
+      body-width: 1500px
+      margin-width: 500px
+      gutter-width: 1.5rem
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Environment Setup {.hidden}
+
+```{=html}
+<style type="text/css">
+caption, .table-caption {
+  text-align: left;
+}
+</style>
+```
+```{r}
+#| echo: false
+
+options(scipen=999)
+
+source(here::here("!libraries.R"))
+source(here::here("!functions.R"))
+source(here::here("!directories.R"))
+source(here::here("!load_data.R"))
+source(here::here("!preprocess_data.R"))
+```
+
+```{r}
+#| label: shorten-long-path
+#| include: false
+
+if(nchar(dir_data) > 80)
+{
+  system("subst x: /D")
+  short_cut <- dir_home %>% dirname
+  system(paste0("subst x: \"", short_cut, "\""))
+  
+  dir_objects_names <- ls(pattern = "^dir_")
+  
+  dir_list <- mget(dir_objects_names)
+  
+  dir_list_shortened <- lapply(
+    dir_list,
+    function(y) create_shortcut(y, short_cut, "x")
+  )
+  list2env(dir_list_shortened, envir = .GlobalEnv)  
+}
+```
+
+## Model Parameters
+
+```{r}
+platforms <- names(data_abundance)
+
+qc_detail <- noquote(fs::path(here::here(), "TL_plasma metabolome overview", "!analytic_workflow.html"))
+
+exposure <- "dde_cat_num"
+covariates <- c("age_baseline", "sex", "race_binary", "parents_income_new", "site")
+
+outcome <- c("bmi", "uwaist")
+
+p_cutoff_sig_feat <- 0.05
+q_cutoff_sig_feat <- 0.05
+mum_wkpath <- fs::path(dir_temp_data, paste0("mummichog_", exposure, "_feat_interaction_q_", p_cutoff_sig_feat))
+mum_wkpath_outcome <- fs::path(dir_temp_data, paste0("mummichog_", outcome, "_feat_q_", p_cutoff_sig_feat))
+mum_wkpath_outcome_diet <- fs::path(dir_temp_data, paste0("mummichog_", outcome, "_diet_feat_q_", p_cutoff_sig_feat))
+mum_wkpath_outcome_DDE <- fs::path(dir_temp_data, paste0("mummichog_", outcome, "_DDE_feat_q_", p_cutoff_sig_feat))
+```
+
+## Model Results
+
+### MWAS for plasma feats \~ DDE
+
+```{r}
+#| message: false
+#| warning: false
+
+# LMM results
+load(fs::path(dir_temp_data, "model_statistics_DDE_num.RData"))
+
+# Pathway results
+## Summarize mummichog results
+list.filenames <- list.files(path = mum_wkpath,
+  pattern="^.*mcg_pathwayanalysis.*.xlsx$",full.names = TRUE, recursive = TRUE) %>%
+  fs::path(.)
+pathway_list <- {}
+for(i in 1:length(platforms))
+{
+  pathway_list[[i]] <- read_xlsx(list.filenames[i])
+  pathway_list[[i]] <- pathway_list[[i]][which(pathway_list[[i]]$`p-value` < 0.05 & pathway_list[[i]]$overlap_size >= 2),]
+}
+names(pathway_list) <- platforms
+pathway_list_DDE_num <- pathway_list
+rm(list.filenames, pathway_list)
+
+# Extract statistics of annotated features
+lmm_output_annot_l_DDE_num <- {}
+for(i in 1:length(platforms))
+{
+  lmm_output_annot <- lmm_random_intercept_knot1_covars_DDE_num_output[[i]] %>%
+    dplyr::filter(grepl(paste(feat_annot_l[[i]]$`colnames(x)`, collapse = "|"), row_name))
+  chem_name <- feat_annot_l[[i]]$Metabolite_Name[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+  standard_class <- feat_annot_l[[i]]$Standard_class[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+  standard_group <- feat_annot_l[[i]]$Standard_grp[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+  lmm_output_annot <- bind_cols(list(lmm_output_annot, chem_name, standard_class, standard_group))
+  colnames(lmm_output_annot)[(dim(lmm_output_annot)[2]-2):dim(lmm_output_annot)[2]] <- c("chem_name", "standard_class", "standard_group")
+  lmm_output_annot_l_DDE_num[[i]] <- lmm_output_annot
+  rm(lmm_output_annot, chem_name)
+}
+names(lmm_output_annot_l_DDE_num) <- platforms
+```
+
+### MWAS for outcome \~ plasma feats
+
+```{r load-outcome-results, message=FALSE, warning=FALSE}
+load(fs::path(dir_temp_data, "model_statistics_bmi_uwaist_DDE.RData"))
+
+# Summarize mummichog results
+pathway_outcome_DDE_list <- list({}, {})
+for(k in 1:length(outcome))
+{
+  list.filenames <- list.files(path = mum_wkpath_outcome_DDE[k],
+  pattern="^.*mcg_pathwayanalysis.*.xlsx$",full.names = TRUE, recursive = TRUE)
+
+  for(i in 1:length(platforms))
+  {
+    pathway_outcome_DDE_list[[k]][[i]] <- read_xlsx(list.filenames[i])
+    pathway_outcome_DDE_list[[k]][[i]] <- pathway_outcome_DDE_list[[k]][[i]][which(pathway_outcome_DDE_list[[k]][[i]]$`p-value` < 0.05 & pathway_outcome_DDE_list[[k]][[i]]$overlap_size >= 2),]
+  }
+  names(pathway_outcome_DDE_list[[k]]) <- platforms
+  rm(list.filenames)
+}
+
+# Extract statistics of annotated features
+lmm_output_annot_l_outcome_DDE <- list({}, {})
+for(k in 1:length(outcome))
+{
+  for(i in 1:length(platforms))
+  {
+    lmm_output_annot <- lmm_random_intercept_knot1_covars_outcome_DDE_output[[k]][[i]] %>%
+      dplyr::filter(grepl(paste(feat_annot_l[[i]]$`colnames(x)`, collapse = "|"), row_name))
+    chem_name <- feat_annot_l[[i]]$Metabolite_Name[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+    standard_class <- feat_annot_l[[i]]$Standard_class[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+    standard_group <- feat_annot_l[[i]]$Standard_grp[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+    lmm_output_annot <- bind_cols(list(lmm_output_annot, chem_name, standard_class, standard_group))
+    colnames(lmm_output_annot)[(dim(lmm_output_annot)[2]-2):dim(lmm_output_annot)[2]] <- c("chem_name", "standard_class", "standard_group")
+    lmm_output_annot_l_outcome_DDE[[k]][[i]] <- lmm_output_annot
+    rm(lmm_output_annot, chem_name)
+  }
+  names(lmm_output_annot_l_outcome_DDE[[k]]) <- platforms
+}
+```
+
+### MWAS for outcome \~ plasma feat with adjustment for diet
+
+```{r load-outcome-results-diet, message=FALSE, warning=FALSE}
+load(fs::path(dir_temp_data, "model_statistics_bmi_uwaist_diet.RData"))
+
+# Extract statistics of annotated features
+lmm_output_annot_l_outcome_diet <- list({}, {})
+for(k in 1:length(outcome))
+{
+  for(i in 1:length(platforms))
+  {
+    lmm_output_annot <- lmm_random_intercept_covars_diet_outcome_output[[k]][[i]] %>%
+      dplyr::filter(grepl(paste(feat_annot_l[[i]]$`colnames(x)`, collapse = "|"), row_name))
+    chem_name <- feat_annot_l[[i]]$Metabolite_Name[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+    lmm_output_annot <- cbind(lmm_output_annot, chem_name)
+    lmm_output_annot_l_outcome_diet[[k]][[i]] <- lmm_output_annot
+    rm(lmm_output_annot, chem_name)
+  }
+  names(lmm_output_annot_l_outcome_diet[[k]]) <- platforms
+}
+```
+
+### MWAS for AT feats \~ DDE
+
+```{r}
+lm_output_DDE_ATfeats <- readRDS(
+  fs::path(
+    dir_temp_data,
+    "sig_AT_feats_with_DDE_num.rds"
+  )
+)
+```
+
+### MWAS for plasma feat \~ AT feats
+
+```{r}
+lmm_output_ATfeats_plasmafeats <- readRDS(
+  fs::path(
+    dir_temp_data,
+    "sig_plasma_feats_with_AT_feats.rds"
+  )
+)
+```
+
+### TWAS for mRNA \~ DDE
+
+```{r}
+limma_output_DDE_ATRNA <- readRDS(
+  fs::path(
+    dir_temp_data,
+    "sig_genes_with_DDE_num.rds"
+  )
+)
+```
+
+## Labelling
+
+### Metabolite labels
+
+```{r}
+#| eval: false
+#| include: false
+
+met_list <- Reduce(
+  union,
+  list(
+    unique(lm_output_DDE_ATfeats$name),
+    unique(lmm_output_ATfeats_plasmafeats$name_AT),
+    unique(lmm_output_ATfeats_plasmafeats$name_plasma)
+  )
+) %>% data.frame
+colnames(met_list) <- "name"
+
+write.csv(
+  met_list,
+  fs::path(
+    dir_temp_data,
+    "Metabolites_name_class.csv"
+  ),
+  row.names = F
+)
+```
+
+I exported the significant metabolites in adipose tissue and plasma into a .csv file in [here](%60r%20dir_temp_data%60) and manually added cleaner names. Then, I grouped them based on their chemical structures and primary biological functions.
+
+```{r}
+met_label <- read.csv(
+  fs::path(
+    dir_temp_data,
+    "Metabolites_name_class.csv"
+  )
+)
+
+table(met_label$class) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+### Pathway labels
+
+```{r}
+pathway_class <- list(
+  c("Arachidonic acid metabolism",
+    "Leukotriene metabolism",
+    "Linoleate metabolism",
+    "Omega-3 fatty acid metabolism",
+    "Prostaglandin formation from arachidonate"),
+  c("Glycine, serine, alanine and threonine metabolism",
+    "Tyrosine metabolism",
+    "Urea cycle/amino group metabolism",
+    "Valine, leucine and isoleucine degradation",
+    "Glutathione Metabolism",
+    "Tryptophan metabolism"),
+  c("Ascorbate (Vitamin C) and Aldarate Metabolism",
+    "Biopterin metabolism",
+    "Vitamin B9 (folate) metabolism",
+    "Vitamin D3 (cholecalciferol) metabolism",
+    "Vitamin E metabolism",
+    "Vitamin B6 (pyridoxine) metabolism"),
+  c("Hexose phosphorylation",
+    "Fructose and mannose metabolism")
+)
+names(pathway_class) <- c("lipid", "AA", "vita", "carb")
+```
+
+## Main Document
+
+### Table 1
+
+```{r}
+#| message: false
+
+source(here::here("1_descriptive statistics.R"), echo = FALSE, local = knitr::knit_global())
+
+table1(~ age_baseline + sex + race_binary + parents_income_new + site + x44_dde_adipose_0 | dde_cat,
+         data = data %>% filter(visit == 0),
+         caption = "(\\#tab:thetab)Descriptive characteristics for covariates by DDE exposure at baseline for the 60 participants included in the current analysis."
+)
+
+table1(as.formula(paste0("~", paste(outcome, collapse = " + "), "| visit_new*dde_cat")),
+       data = data %>% filter(visit %in% c(0, 0.5, 1, 3)))
+
+table1(as.formula(paste0("~", paste(outcome, collapse = " + "), "| visit_new")),
+       data = data %>% filter(visit %in% c(0, 0.5, 1, 3)))
+
+data_plasma_metabo[[1]] %>%
+  dplyr::group_by(key) %>%
+  dplyr::count(visit) %>%
+  dplyr::select(n) %>% table %>% table %>%
+  kbl(caption = "The number of records for each participant") %>%
+  kable_styling(full_width = T)
+
+quantile(data_w$x44_dde_adipose_0, c(0:3/3))
+```
+
+As a result, there were 60 participants included in the present analysis. Thirty had four records (no missing at every visit); twenty had three records; seven had two records; three had one record.
+
+### Table 2
+
+```{r}
+#| results: asis
+
+cat("**", "Number of features in each feature table:", "**\n\n", sep = "")
+lapply(lmm_random_intercept_knot1_covars_DDE_num_output, function(x) dim(x)[1]/3)
+cat("**", "Number of significant coefficients (q < ", q_cutoff_sig_feat, ") of product terms in each feature table:", "**\n\n", sep = "")
+lapply(lmm_random_intercept_knot1_covars_DDE_num_output,
+       function(x) table(x %>%
+                           filter(period != 0) %>%
+                           select(p_adjust) %>%
+                           unlist < q_cutoff_sig_feat))
+cat("**", "Number of significant interaction (q < ", q_cutoff_sig_feat, ") in each feature table:", "**\n\n", sep = "")
+lapply(lmm_random_intercept_knot1_covars_DDE_num_output, function(x)
+  table(as.numeric(x$p_adjust_interaction) < q_cutoff_sig_feat))
+
+sig_summary <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  
+  output <- lmm_random_intercept_knot1_covars_DDE_num_output[[i]]
+  coefs <- output %>%
+    dplyr::filter(period != 0) %>%
+    dplyr::group_by(row_name) %>%
+    pivot_wider(id_cols = c(row_name), names_from = period, values_from = coef, names_prefix = "coef_")
+  q_values <- output %>%
+    dplyr::filter(period != 0) %>%
+    dplyr::group_by(row_name) %>%
+    pivot_wider(id_cols = c(row_name), names_from = period, values_from = p_adjust, names_prefix = "q_")
+  q_inter_values <- output %>%
+    dplyr::filter(!is.na(p_adjust_interaction)) %>%
+    dplyr::select(row_name, p_adjust_interaction)
+
+  output_wider <- cbind(coefs, subset(q_values, select = -c(row_name)))
+  
+  output_pattern <- output_wider %>%
+    dplyr::reframe(
+      row_name = row_name,
+      direction_1 = ifelse(q_1 < q_cutoff_sig_feat & coef_1 > 0, "+",
+                           ifelse(q_1 < q_cutoff_sig_feat & coef_1 < 0, "-", NA)),
+      direction_2 = ifelse(q_2 < q_cutoff_sig_feat & coef_2 > 0, "+",
+                           ifelse(q_2 < q_cutoff_sig_feat & coef_2 < 0, "-", NA))
+    )
+  
+  sig_feat_by_q <- q_values$row_name[which(q_values$q_1 < q_cutoff_sig_feat | q_values$q_2 < q_cutoff_sig_feat)]
+  sig_feat_by_q_inter <- q_inter_values$row_name[which(q_inter_values$p_adjust_interaction < q_cutoff_sig_feat)]
+  sig_feat <- union(sig_feat_by_q, sig_feat_by_q_inter)
+  
+  output_pattern_final <- output_pattern %>%
+    dplyr::filter(row_name %in% sig_feat)
+  
+  q_inter_values_final <- q_inter_values %>%
+    dplyr::filter(row_name %in% sig_feat)
+
+  output_final <- cbind(output_pattern_final, subset(q_inter_values_final, select = -row_name)) %>%
+    mutate(sig_inter = ifelse(as.numeric(p_adjust_interaction) < q_cutoff_sig_feat, "Yes", "No"))
+  
+  output_final$pattern <- with(output_final,
+                               paste(direction_1, direction_2, sig_inter, sep = ", "))
+  
+  output_final %>%
+    dplyr::group_by(pattern) %>%
+    dplyr::reframe(n = n()) %>%
+    kbl(caption = paste0("The number of significant (q<0.05) metabolic features by exposure groups and periods for ", platforms[i])) %>%
+    kable_styling(full_width = T) %>%
+    print
+  
+  sig_summary[[i]] <- output_final
+  
+  rm(output_final, q_inter_values_final, output_pattern_final, sig_feat, sig_feat_by_q_inter, sig_feat_by_q, output_pattern, output, coefs, q_values, q_inter_values)
+    
+  cat("\n")
+}
+```
+
+```{r, echo=FALSE, eval=FALSE}
+#| echo: false
+#| eval: false
+
+sig_summary_l <- lapply(sig_summary,
+                        function(x) x %>%
+                          dplyr::group_by(pattern) %>%
+                          dplyr::reframe(n = n()))
+names(sig_summary_l) <- platforms
+
+colnames(sig_summary_l[[1]])[2] <- names(sig_summary_l)[1]
+colnames(sig_summary_l[[2]])[2] <- names(sig_summary_l)[2]
+colnames(sig_summary_l[[3]])[2] <- names(sig_summary_l)[3]
+colnames(sig_summary_l[[4]])[2] <- names(sig_summary_l)[4]
+sig_summary_df <- Reduce(function(df1,df2) merge(df1, df2, by="pattern", all = T),
+                         sig_summary_l)
+
+# write.csv(sig_summary_df,
+#           file = fs::path(dir_temp_data, "sig_feat_summary.csv"))
+```
+
+### Figure 1
+
+Figure 1 is the analysis design and was created by Biorender.
+
+### Figure 2
+
+```{r}
+#| results: asis
+
+cat("**", "Number of features in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE_num, function(x) dim(x)[1]/3)
+cat("**", "Number of significant coefficients (q < ", q_cutoff_sig_feat, ") of product terms in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE_num,
+       function(x) table(x %>%
+                           filter(period != 0) %>%
+                           select(p_adjust) %>%
+                           unlist < q_cutoff_sig_feat))
+cat("**", "Number of significant interaction (q < ", q_cutoff_sig_feat, ") in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE_num, function(x) table(x$p_adjust_interaction < q_cutoff_sig_feat))
+
+output_sig_feat_l <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  output <- lmm_output_annot_l_DDE_num[[i]]
+  
+  sig_feat_by_q <- output %>%
+    dplyr::filter(period != 0) %>%
+    dplyr::filter(p_adjust < q_cutoff_sig_feat) %>%
+    dplyr::select(row_name) %>%
+    unlist %>% unique
+  sig_feat_by_q_inter <- unique(output$row_name[which(output$p_adjust_interaction < q_cutoff_sig_feat)])
+  sig_feat <- union(sig_feat_by_q, sig_feat_by_q_inter)
+  
+  output_sig_feat <- output %>%
+    dplyr::filter(row_name %in% sig_feat) %>%
+    dplyr::filter(period != 0)
+  
+  t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+  margin_error <- t_score*as.numeric(output_sig_feat$se)
+  lower_bound <- as.numeric(output_sig_feat$coef) - margin_error
+  upper_bound <- as.numeric(output_sig_feat$coef) + margin_error
+  
+  output_sig_feat$coef_num <- as.numeric(output_sig_feat$coef)
+  output_sig_feat <- Reduce(cbind,
+                            list(output_sig_feat, lower_bound, upper_bound))
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))-1] <- "lower_bound"
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))] <- "upper_bound"
+  
+  output_sig_feat_l[[i]] <- output_sig_feat
+}
+output_sig_feat <- bind_rows(output_sig_feat_l)
+
+table(output_sig_feat$chem_name) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+```{r}
+#| eval: false
+
+output_sig_feat$chem_name_new <- ifelse(output_sig_feat$chem_name == "[C11.1]-Undecylenic acid", "Undecylenic acid", output_sig_feat$chem_name)
+output_sig_feat$p_adjust_asterisk <- ifelse(as.numeric(output_sig_feat$p_adjust) < 0.05, "Y", "")
+
+output_sig_feat <- output_sig_feat %>%
+  dplyr::filter(!(standard_class %in% c("Pesticides")))
+output_sig_feat <- output_sig_feat %>%
+  dplyr::filter(!(chem_name %in% c("N-Acetylproline", "Undecylenic acid", "Mandelate")))
+
+# png(file = fs::path(dir_figure, "Figure 2.png"), width = 1100, height = 650)
+ggplot(output_sig_feat, 
+       aes(x = period, y = coef_num, fill = period, shape = p_adjust_asterisk)) +
+  geom_point(shape = 21, size = 4) +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound, color = period), width = 0.3, alpha= 0.7, linewidth = 1.5) +
+  geom_point(aes(y = upper_bound + 0.1),
+             position = position_dodge(0.9), 
+             show.legend = FALSE) +
+  scale_shape_manual(values = c(NA, 8)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("#377eb8", "#e41a1c")) +
+  scale_fill_manual(values = c("#377eb8", "#e41a1c")) +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  facet_grid(~chem_name_new) +
+  coord_cartesian(clip = 'off',
+                  ylim = c(min(output_sig_feat$lower_bound), max(output_sig_feat$upper_bound))) +  
+  annotate(geom = "text", x = 1, y = -1.7,
+           label = TeX("$1^{st}$ year"), angle = "90", size = 4) +
+  annotate(geom = "text", x = 2, y = -1.7,
+           label = TeX("$1^{st}$-$3^{rd}$ year"), angle = "90", size = 4) +
+  theme_classic() +
+  theme(plot.margin = unit(c(1, 1, 6, 1), "lines"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11),
+        axis.text.x = element_blank(),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        strip.text = element_text(size = 10),
+        legend.position = "none")
+# dev.off()
+
+ggsave(
+  fs::path(
+    dir_figure,
+    "Figure 2.png"
+  ), width = 8.7, height = 4.5, units = "in"
+)
+
+output_sig_feat_inter_l <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  output <- lmm_output_annot_l_DDE_num[[i]]
+  
+  sig_feat_by_q <- output %>%
+    dplyr::filter(period != 0) %>%
+    dplyr::filter(p_adjust < q_cutoff_sig_feat) %>%
+    dplyr::select(row_name) %>%
+    unlist %>% unique
+  sig_feat_by_q_inter <- unique(output$row_name[which(output$p_adjust_interaction < q_cutoff_sig_feat)])
+  sig_feat <- union(sig_feat_by_q, sig_feat_by_q_inter)
+  
+  output_sig_feat <- output %>%
+    dplyr::filter(row_name %in% sig_feat) %>%
+    dplyr::filter(period == 0)
+  
+  output_sig_feat_inter_l[[i]] <- output_sig_feat
+}
+output_sig_feat_inter <- bind_rows(output_sig_feat_inter_l)
+
+output_sig_feat_inter %>%
+  dplyr::select(chem_name, p_adjust_interaction)
+
+t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+margin_error <- t_score*as.numeric(output$se)
+lower_bound <- as.numeric(output$coef) - margin_error
+upper_bound <- as.numeric(output$coef) + margin_error
+
+output$coef_num <- as.numeric(output$coef)
+output <- Reduce(cbind,
+                          list(output, lower_bound, upper_bound))
+colnames(output)[length(colnames(output))-1] <- "lower_bound"
+colnames(output)[length(colnames(output))] <- "upper_bound"
+
+output %>%
+  dplyr::filter(row_name %in% sig_feat) %>%
+  dplyr::group_by(chem_name) %>%
+  slice(1) %>%
+  dplyr::select(chem_name, p_adjust_interaction, row_name, coef, lower_bound, upper_bound) %>% 
+  kbl() %>% 
+  kable_classic()
+
+# output %>%
+#   dplyr::filter(chem_name == "Tryptophan") %>%
+#   dplyr::select(chem_name, p_adjust_interaction, row_name, coef, lower_bound, upper_bound) %>% 
+#   kbl() %>% 
+#   kable_classic()
+```
+
+### Figure 3
+
+```{r}
+#| results: asis
+
+for(k in 1:length(outcome))
+{
+  cat("Outcome:", "**", outcome[k], "**\n\n", sep = "")
+  
+  cat("**", "Number of features in each annotated feature table:", "**\n\n", sep = "")
+  lapply(lmm_output_annot_l_outcome_DDE[[k]], function(x) dim(x)[1]) %>% print
+  
+  cat("**", "Number of significant coefficients (q < ", q_cutoff_sig_feat, ") in each feature table:", "**\n\n", sep = "")
+  lapply(lmm_output_annot_l_outcome_DDE[[k]], function(x) table(x$p_adjust < q_cutoff_sig_feat)) %>% print
+}
+
+for(k in 1:length(outcome))
+{
+  lapply(lmm_random_intercept_knot1_covars_outcome_DDE_output[[k]],
+         function(x) table(x$p_adjust < q_cutoff_sig_feat)) %>% print
+}
+```
+
+```{r}
+k = 1
+
+cat("Outcome:", "**", outcome[k], "**\n\n", sep = "")
+
+sig_feat_by_platform <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  if(sum(lmm_output_annot_l_outcome_DDE[[k]][[i]]$p_adjust < q_cutoff_sig_feat) == 0)
+  {
+    cat("**", "No significant features at q < 0.05 for ", platforms[i], "**\n\n", sep = "")
+    next
+  }
+  
+  output <- lmm_output_annot_l_outcome_DDE[[k]][[i]]
+  sig_feat <- unique(output$row_name[which(output$p_adjust < q_cutoff_sig_feat)])
+  
+  output_sig_feat <- output %>%
+    dplyr::filter(row_name %in% sig_feat)
+  
+  t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+  margin_error <- t_score*as.numeric(output_sig_feat$se)
+  lower_bound <- as.numeric(output_sig_feat$coef) - margin_error
+  upper_bound <- as.numeric(output_sig_feat$coef) + margin_error
+  
+  output_sig_feat$coef_num <- as.numeric(output_sig_feat$coef)
+  output_sig_feat <- Reduce(cbind,
+                            list(output_sig_feat, lower_bound, upper_bound))
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))-1] <- "lower_bound"
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))] <- "upper_bound"
+  
+  output_sig_feat$mode <- platforms[i]
+  
+  output_sig_feat$p_adjust_asterisk <- ifelse(as.numeric(output_sig_feat$p_adjust) < 0.05, "Y", "")
+  
+  output_sig_feat <- output_sig_feat %>%
+    dplyr::filter(!(chem_name %in% c("Spiroxamine.1; Spiroxamine.2")))
+  
+  output_sig_feat$chem_name_new <- met_label$name_short[match(output_sig_feat$chem_name, met_label$name)]
+  output_sig_feat$chem_class <- met_label$class[match(output_sig_feat$chem_name, met_label$name)]
+  # output_sig_feat$overlap <- compound_class$overlap[match(output_sig_feat$chem_name, compound_class$chem_name)]
+  
+  sig_feat_by_platform[[i]] <- output_sig_feat
+}
+
+sig_feat_by_platform <- bind_rows(sig_feat_by_platform)
+sig_feat_by_platform <- sig_feat_by_platform %>%
+  dplyr::group_by(chem_name_new) %>%
+  slice(n())
+sig_feat_by_platform$chem_name_new <- factor(sig_feat_by_platform$chem_name_new, levels = unique(sig_feat_by_platform$chem_name_new))
+sig_feat_by_platform$chem_class <- factor(sig_feat_by_platform$chem_class, levels = unique(sig_feat_by_platform$chem_class))
+
+sig_feat_by_platform <- sig_feat_by_platform %>% 
+  arrange(chem_class, chem_name_new)
+sig_feat_by_platform$chem_class <- factor(sig_feat_by_platform$chem_class,
+                                          levels = c("Amino acids and derivatives",
+                                                     "Fatty acids",
+                                                     "Nucleotide derivatives",
+                                                     "Acylcarnitines",
+                                                     "Hormones",
+                                                     "Others"))
+
+p <- ggplot(sig_feat_by_platform, 
+       aes(x = chem_name_new, y = coef_num)) +
+  geom_point(shape = 20, size = 4, color = "black") +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound), width = 0.3, alpha= 0.7, linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  facet_grid(chem_class ~ .,
+             scales = "free_y",
+             space = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans"),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 15),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        legend.position = "none",
+        panel.background = element_rect(fill="grey95"),
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text.y = element_text(size = 15, angle = 0, hjust = 0))
+```
+
+```{r}
+#| eval: false
+
+width_usr <- 600
+height_usr <- 450
+png(file = fs::path(dir_figure, paste0("Figure 3", ".png")), width = width_usr, height = height_usr)
+print(p)
+dev.off()
+```
+
+### Figure 4
+
+#### Figure 4A
+
+```{r}
+pathway_list_DDE_sig <- lapply(pathway_list_DDE_num, function(x)
+  x[which(x$`p-value` < p_cutoff_sig_feat & x$overlap_size >= 2), c(1:4)])
+pathway_list_DDE_sig <- bind_rows(pathway_list_DDE_sig, .id = "mode")
+pathway_list_DDE_sig$sig_prop <- pathway_list_DDE_sig$overlap_size/pathway_list_DDE_sig$pathway_size
+pathway_list_DDE_sig$path_name <- gsub("metabolism", "met.", pathway_list_DDE_sig$pathway)
+
+pathway_list_DDE_sig <- pathway_list_DDE_sig %>% 
+  dplyr::mutate(
+    class = case_when(
+      pathway %in% pathway_class$lipid ~ "Lipid Metabolism",
+      pathway %in% pathway_class$AA ~ "Amino Acid Metabolism",
+      pathway %in% pathway_class$vita ~ "Metabolism of Cofactor and Vitamins",
+      pathway %in% pathway_class$carb ~ "Carbohydrate Metabolism",
+      TRUE ~ "Others"
+    )
+  )
+
+# png(file = fs::path(dir_figure, "Figure 4A.png"),
+#     width = 6.5, height = 2.5, units = "in", res = 600)
+p4a <- ggplot(pathway_list_DDE_sig, aes(x = pathway, y = -log(`p-value`))) +
+  geom_point(aes(size = overlap_size)) +
+  scale_size_continuous(range=c(1,5)) +
+  ylim(0,6) +
+  geom_hline(yintercept = -log(0.05), linetype="dashed", color = "red") +
+  xlab(NULL) +
+  ylab(expression(-log(italic("p")))) +
+  facet_grid(class ~ .,
+             scales = "free_y",
+             space = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        legend.justification = "left",
+        legend.text = element_text(size=10),
+        legend.title = element_text(size=10, hjust = 0),
+        text = element_text(size = 11, color = "black"),
+        axis.text.y = element_text(size = 10),
+        axis.line.x = element_line(arrow = arrow(angle = 30, type = "open", length = unit(0.1, "inches"))),
+        axis.line.y = element_line(color = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill="grey95"),
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text.y = element_text(size = 11, angle = 0, hjust = 0)) +
+  guides(size = guide_legend(title = "N. of significant metabolites")) 
+# dev.off()
+```
+
+#### Figure 4B
+
+```{r}
+#| results: asis
+
+overlap_pathway <- {}
+for(k in 1:length(outcome))
+{
+  pathway_list_outcome_sig <- lapply(pathway_outcome_DDE_list[[k]], function(x)
+    x[which(x$`p-value` < p_cutoff_sig_feat & x$overlap_size >= 2), c(1:4)])
+  pathway_list_outcome_sig <- bind_rows(pathway_list_outcome_sig, .id = "mode")
+  pathway_names <- pathway_list_outcome_sig %>%
+    dplyr::group_by(pathway) %>%
+    dplyr::slice(1) %>%
+    dplyr::select(pathway) %>% unlist
+  
+  overlap_pathway[[k]] <- pathway_names
+}
+overlap_pathway <- Reduce(intersect, overlap_pathway)
+print(overlap_pathway)
+```
+
+```{r}
+k = 1
+
+pathway_list_outcome_sig <- lapply(pathway_outcome_DDE_list[[k]], function(x)
+  x[which(x$`p-value` < p_cutoff_sig_feat & x$overlap_size >= 2), c(1:4)])
+pathway_list_outcome_sig <- bind_rows(pathway_list_outcome_sig, .id = "mode")
+pathway_list_outcome_sig$sig_prop <- pathway_list_outcome_sig$overlap_size/pathway_list_outcome_sig$pathway_size
+pathway_list_outcome_sig$path_name <- gsub("metabolism", "met.", pathway_list_outcome_sig$pathway)
+
+pathway_list_outcome_sig <- pathway_list_outcome_sig %>%
+  dplyr::arrange(pathway)
+pathway_list_outcome_sig$pathway <- factor(pathway_list_outcome_sig$pathway,
+                                           levels = unique(pathway_list_outcome_sig$pathway))
+pathway_list_outcome_sig$mode <- factor(pathway_list_outcome_sig$mode,
+                                           levels = unique(pathway_list_outcome_sig$mode))
+pathway_list_outcome_sig <- pathway_list_outcome_sig %>%
+  dplyr::group_by(pathway) %>%
+  dplyr::mutate(pvalue_ave = mean(`p-value`),
+                sig_prop_ave = mean(sig_prop),
+                overlap_size_ave = ceiling(mean(overlap_size)))
+
+pathway_list_outcome_sig_input <- pathway_list_outcome_sig %>%
+  dplyr::group_by(pathway) %>%
+  dplyr::slice(1)
+
+pathway_list_outcome_sig_input <- pathway_list_outcome_sig_input %>% 
+  dplyr::mutate(
+    class = case_when(
+      pathway %in% pathway_class$lipid ~ "Lipid Metabolism",
+      pathway %in% pathway_class$AA ~ "Amino Acid Metabolism",
+      pathway %in% pathway_class$vita ~ "Metabolism of Cofactor and Vitamins",
+      TRUE ~ "Others"
+    )
+  )
+
+p4b <- ggplot(pathway_list_outcome_sig_input, aes(x = pathway, y = -log(pvalue_ave))) +
+  geom_point(aes(size = overlap_size_ave)) +
+  geom_hline(yintercept = -log(0.05), linetype="dashed", color = "red") +
+  scale_size_continuous(range=c(1,5)) +
+  xlab(NULL) +
+  ylab(expression(-log(italic("p")))) +
+  facet_grid(class ~ .,
+             scales = "free_y",
+             space = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(legend.title.align = 0,
+        legend.position = "bottom",
+        legend.justification = "left",
+        legend.text = element_text(size=10),
+        legend.title = element_text(size=10),
+        text = element_text(size = 11, color = "black"),
+        axis.line.x = element_line(arrow = arrow(angle = 30, type = "open", length = unit(0.1, "inches"))),
+        axis.line.y = element_line(color = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill="grey95"),
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text.y = element_text(size = 11, angle = 0, hjust = 0)) +
+  guides(size = guide_legend(title = "N. of significant metabolites"))
+
+# width_usr <- 6.5
+# height_usr <- 5
+# png(file = fs::path(dir_figure, paste0("Figure 4B", ".png")),
+#     width = width_usr, height = height_usr, units = "in", res = 600)
+# print(p)
+# dev.off()
+```
+
+#### Combined
+
+```{r}
+#| eval: false
+
+plot_grid(
+  p4a,
+  p4b,
+  ncol = 1,
+  align = "v",
+  axis = "l",
+  rel_heights = c(1,2)
+)
+
+ggsave(
+  fs::path(
+    dir_figure,
+    "Figure 4.png"
+  ),
+  width = 8, height = 6, units = "in"
+)
+```
+
+### Table 3
+
+```{r}
+#| results: asis
+
+lm_output_DDE_ATfeats %>% 
+  dplyr::select(name, estimate, p_value, adjusted_pval) %>% 
+  kbl() %>% 
+  kable_classic()
+
+lm_output_DDE_ATfeats$name_plot <- met_label$name_short[match(lm_output_DDE_ATfeats$name, met_label$name)]
+lm_output_DDE_ATfeats$class <- met_label$class[match(lm_output_DDE_ATfeats$name, met_label$name)]
+
+lm_output_DDE_ATfeats$class <- factor(
+  lm_output_DDE_ATfeats$class,
+  levels = c("Amino acids and derivatives", "Fatty acids", "Nucleotide derivatives", "Bile acids", "Others"))
+```
+
+```{r}
+lmm_output_ATfeats_plasmafeats_unique <- lmm_output_ATfeats_plasmafeats %>% 
+  dplyr::group_by(name_AT, name_plasma, period) %>% 
+  slice(1) %>% 
+  ungroup
+lmm_output_ATfeats_plasmafeats_unique %>%
+  dplyr::select(name_AT, name_plasma, period, estimate, p_adjust, p_adjust_interaction) %>% 
+  kbl() %>% 
+  kable_classic()
+
+lmm_output_ATfeats_plasmafeats_unique$name_AT_plot <- met_label$name_short[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_AT, met_label$name
+)]
+lmm_output_ATfeats_plasmafeats_unique$name_plasma_plot <- met_label$name_short[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_plasma, met_label$name
+)]
+
+lmm_output_ATfeats_plasmafeats_unique$class_AT <- met_label$class[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_AT, met_label$name
+)]
+lmm_output_ATfeats_plasmafeats_unique$class_plasma <- met_label$class[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_plasma, met_label$name
+)]
+
+lmm_output_ATfeats_plasmafeats_unique$class_AT <- factor(
+  lmm_output_ATfeats_plasmafeats_unique$class_AT,
+  levels = c("Amino acids and derivatives", "Bile acids", "Others"))
+
+lmm_output_ATfeats_plasmafeats_unique$class_plasma <- factor(
+  lmm_output_ATfeats_plasmafeats_unique$class_plasma,
+  levels = c("Amino acids and derivatives", "Fatty acids", "Nucleotide derivatives", "Acylcarnitines", "Hormones",  "Bile acids", "Others"))
+
+lmm_output_ATfeats_plasmafeats_unique_wider <- pivot_wider(
+  lmm_output_ATfeats_plasmafeats_unique,
+  names_from = period,
+  values_from = c(estimate, se, statistic, pvalue, p_adjust, lower, upper)
+)
+```
+
+```{r}
+plot_input <- merge(
+  lm_output_DDE_ATfeats,
+  lmm_output_ATfeats_plasmafeats_unique_wider,
+  by.x = "feature_name", by.y = "var")
+
+plot_input %>% 
+  dplyr::select(name_plot, estimate, conf_low, conf_high, name_plasma_plot, estimate_1, lower_1, upper_1, estimate_2, lower_2, upper_2) %>% 
+  kbl() %>% 
+  kable_classic()
+
+plot_input$exposure <- "p,p'-DDE"
+plot_input <- plot_input %>% 
+  dplyr::mutate(
+    estimate_ci_AT = paste0(
+      create_two_digits(estimate),
+      " (",
+      create_two_digits(conf_low),
+      ", ",
+      create_two_digits(conf_high),
+      ")"
+    ),
+    estimate_ci_plasma_p1 = paste0(
+      create_two_digits(estimate_1),
+      " (",
+      create_two_digits(lower_1),
+      ", ",
+      create_two_digits(upper_1),
+      ")"
+    ),
+    estimate_ci_plasma_p2 = paste0(
+      create_two_digits(estimate_2),
+      " (",
+      create_two_digits(lower_2),
+      ", ",
+      create_two_digits(upper_2),
+      ")"
+    )
+  )
+
+plot_input$color_p1 <- ifelse(
+  plot_input$p_adjust_1 < 0.05, 1,
+  ifelse(
+    plot_input$pvalue_1 < 0.05, 2, 3))
+plot_input$color_p2 <- ifelse(
+  plot_input$p_adjust_2 < 0.05, 1,
+  ifelse(
+    plot_input$pvalue_2 < 0.05, 2, 3))
+
+plot_input <- plot_input %>% 
+  dplyr::arrange(name_AT_plot, class_plasma)
+```
+
+```{r}
+plot_input %>% 
+  dplyr::select(exposure, name_plot, estimate_ci_AT, name_plasma_plot, estimate_ci_plasma_p1, estimate_ci_plasma_p2) %>% 
+  kbl() %>% 
+  kable_classic(html_font = "Arial") %>% 
+  column_spec(5,
+              bold = plot_input$color_p1 == 1,
+              color = spec_color(
+                plot_input$color_p1,
+                palette = c("white", "white", "black")),
+              background = spec_color(
+                plot_input$color_p1,
+                palette = c("red", "pink", "white"))) %>% 
+  column_spec(6,
+              bold = plot_input$color_p2 == 1,
+              color = spec_color(
+                plot_input$color_p2,
+                palette = c("white", "white", "black")),
+              background = spec_color(
+                plot_input$color_p2,
+                palette = c("red", "pink", "white"))) %>% 
+  column_spec(4,
+              color = "white",
+              background = spec_color(
+                as.integer(plot_input$class_plasma),
+                palette = c("#1f77b4", "#ff7f0e", "#2ca02c", "#FFD700", "#9467bd", "#808000", "#708090")
+              ))
+```
+
+### Figure 5
+
+```{r}
+lmm_output_ATfeats_plasmafeats_unique <- lmm_output_ATfeats_plasmafeats %>% 
+  dplyr::group_by(name_AT, name_plasma, period) %>% 
+  slice(1) %>% 
+  ungroup
+lmm_output_ATfeats_plasmafeats_unique %>%
+  dplyr::select(name_AT, name_plasma, period, estimate, p_adjust, p_adjust_interaction) %>% 
+  kbl() %>% 
+  kable_classic()
+
+lmm_output_ATfeats_plasmafeats_unique$name_AT_plot <- met_label$name_short[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_AT, met_label$name
+)]
+lmm_output_ATfeats_plasmafeats_unique$name_plasma_plot <- met_label$name_short[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_plasma, met_label$name
+)]
+
+lmm_output_ATfeats_plasmafeats_unique$class_AT <- met_label$class[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_AT, met_label$name
+)]
+lmm_output_ATfeats_plasmafeats_unique$class_plasma <- met_label$class[match(
+  lmm_output_ATfeats_plasmafeats_unique$name_plasma, met_label$name
+)]
+
+lmm_output_ATfeats_plasmafeats_unique$class_AT <- factor(
+  lmm_output_ATfeats_plasmafeats_unique$class_AT,
+  levels = c("Amino acids and derivatives", "Bile acids", "Others"))
+
+lmm_output_ATfeats_plasmafeats_unique$class_plasma <- factor(
+  lmm_output_ATfeats_plasmafeats_unique$class_plasma,
+  levels = c("Amino acids and derivatives", "Fatty acids", "Nucleotide derivatives", "Acylcarnitines", "Hormones",  "Bile acids", "Others"))
+
+lmm_output_ATfeats_plasmafeats_unique_wider <- pivot_wider(
+  lmm_output_ATfeats_plasmafeats_unique,
+  names_from = period,
+  values_from = c(estimate, se, statistic, pvalue, p_adjust, lower, upper)
+)
+```
+
+```{r}
+output_sig_feat_l <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  output <- lmm_output_annot_l_DDE_num[[i]]
+  
+  sig_feat_by_q <- output %>%
+    dplyr::filter(period != 0) %>%
+    dplyr::filter(p_adjust < q_cutoff_sig_feat) %>%
+    dplyr::select(row_name) %>%
+    unlist %>% unique
+  sig_feat_by_q_inter <- unique(output$row_name[which(output$p_adjust_interaction < q_cutoff_sig_feat)])
+  sig_feat <- union(sig_feat_by_q, sig_feat_by_q_inter)
+  
+  output_sig_feat <- output %>%
+    dplyr::filter(row_name %in% sig_feat) %>%
+    dplyr::filter(period != 0)
+  
+  t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+  margin_error <- t_score*as.numeric(output_sig_feat$se)
+  lower_bound <- as.numeric(output_sig_feat$coef) - margin_error
+  upper_bound <- as.numeric(output_sig_feat$coef) + margin_error
+  
+  output_sig_feat$coef_num <- as.numeric(output_sig_feat$coef)
+  output_sig_feat <- Reduce(cbind,
+                            list(output_sig_feat, lower_bound, upper_bound))
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))-1] <- "lower_bound"
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))] <- "upper_bound"
+  
+  output_sig_feat_l[[i]] <- output_sig_feat
+}
+output_sig_feat <- bind_rows(output_sig_feat_l)
+
+output_sig_feat$name_plot <- met_label$name_short[match(output_sig_feat$chem_name, met_label$name)]
+output_sig_feat$class <- met_label$class[match(output_sig_feat$chem_name, met_label$name)]
+```
+
+```{r}
+overlap <- intersect(
+  lmm_output_ATfeats_plasmafeats_unique_wider$name_plasma_plot,
+  output_sig_feat$name_plot)
+
+lmm_output_ATfeats_plasmafeats_unique_wider %>% 
+  dplyr::filter(name_plasma_plot %in% overlap) %>% 
+  dplyr::select(name_AT_plot, name_plasma_plot, estimate_1, estimate_2) %>% 
+  kbl() %>% 
+  kable_classic()
+
+output_sig_feat %>% 
+  dplyr::filter(name_plot %in% overlap) %>% 
+  dplyr::select(name_plot, period, coef) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+```{r}
+output_bmi <- lmm_output_annot_l_outcome_DDE[[1]]
+
+output_bmi <- modify(
+  output_bmi,
+  ~ .x %>% 
+    dplyr::filter(
+      chem_name %in% output_sig_feat$chem_name[match(overlap, output_sig_feat$name_plot)])
+)
+```
+
+```{r}
+#| results: asis
+
+limma_output_DDE_ATRNA %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+## Supplementary Materials
+
+### Figure S2
+
+#### S2A
+
+```{r}
+k = 2
+
+cat("Outcome:", "**", outcome[k], "**\n\n", sep = "")
+
+sig_feat_by_platform <- {}
+for(i in 1:length(platforms))
+{
+  cat("**", platforms[i], "**\n\n", sep = "")
+  if(sum(lmm_output_annot_l_outcome_DDE[[k]][[i]]$p_adjust < q_cutoff_sig_feat) == 0)
+  {
+    cat("**", "No significant features at q < 0.05 for ", platforms[i], "**\n\n", sep = "")
+    next
+  }
+  
+  output <- lmm_output_annot_l_outcome_DDE[[k]][[i]]
+  sig_feat <- unique(output$row_name[which(output$p_adjust < q_cutoff_sig_feat)])
+  
+  output_sig_feat <- output %>%
+    dplyr::filter(row_name %in% sig_feat)
+  
+  t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+  margin_error <- t_score*as.numeric(output_sig_feat$se)
+  lower_bound <- as.numeric(output_sig_feat$coef) - margin_error
+  upper_bound <- as.numeric(output_sig_feat$coef) + margin_error
+  
+  output_sig_feat$coef_num <- as.numeric(output_sig_feat$coef)
+  output_sig_feat <- Reduce(cbind,
+                            list(output_sig_feat, lower_bound, upper_bound))
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))-1] <- "lower_bound"
+  colnames(output_sig_feat)[length(colnames(output_sig_feat))] <- "upper_bound"
+  
+  output_sig_feat$mode <- platforms[i]
+  
+  output_sig_feat$p_adjust_asterisk <- ifelse(as.numeric(output_sig_feat$p_adjust) < 0.05, "Y", "")
+  
+  output_sig_feat <- output_sig_feat %>%
+    dplyr::filter(!(chem_name %in% c("Spiroxamine.1; Spiroxamine.2")))
+  
+  output_sig_feat$chem_name_new <- met_label$name_short[match(output_sig_feat$chem_name, met_label$name)]
+  output_sig_feat$chem_class <- met_label$class[match(output_sig_feat$chem_name, met_label$name)]
+  # output_sig_feat$overlap <- compound_class$overlap[match(output_sig_feat$chem_name, compound_class$chem_name)]
+  
+  sig_feat_by_platform[[i]] <- output_sig_feat
+}
+
+sig_feat_by_platform <- bind_rows(sig_feat_by_platform)
+sig_feat_by_platform <- sig_feat_by_platform %>%
+  dplyr::group_by(chem_name_new) %>%
+  slice(n())
+sig_feat_by_platform$chem_name_new <- factor(sig_feat_by_platform$chem_name_new, levels = unique(sig_feat_by_platform$chem_name_new))
+sig_feat_by_platform$chem_class <- factor(sig_feat_by_platform$chem_class, levels = unique(sig_feat_by_platform$chem_class))
+
+sig_feat_by_platform <- sig_feat_by_platform %>% 
+  arrange(chem_class, chem_name_new)
+sig_feat_by_platform$chem_class <- factor(sig_feat_by_platform$chem_class,
+                                          levels = c("Amino acids and derivatives",
+                                                     "Fatty acids",
+                                                     "Nucleotide derivatives",
+                                                     "Acylcarnitines",
+                                                     "Hormones",
+                                                     "Others"))
+
+p <- ggplot(sig_feat_by_platform, 
+       aes(x = chem_name_new, y = coef_num)) +
+  geom_point(shape = 20, size = 2, color = "black") +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound), width = 0.3, alpha= 0.7, linewidth = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  facet_grid(chem_class ~ .,
+             scales = "free_y",
+             space = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans", face = "plain"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        legend.position = "none",
+        panel.background = element_rect(fill="grey95"),
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text.y = element_text(size = 10, angle = 0, hjust = 0))
+```
+
+#### S2B
+
+```{r}
+k = 2
+
+pathway_list_outcome_sig <- lapply(pathway_outcome_DDE_list[[k]], function(x)
+  x[which(x$`p-value` < p_cutoff_sig_feat & x$overlap_size >= 2), c(1:4)])
+pathway_list_outcome_sig <- bind_rows(pathway_list_outcome_sig, .id = "mode")
+pathway_list_outcome_sig$sig_prop <- pathway_list_outcome_sig$overlap_size/pathway_list_outcome_sig$pathway_size
+pathway_list_outcome_sig$path_name <- gsub("metabolism", "met.", pathway_list_outcome_sig$pathway)
+
+pathway_list_outcome_sig <- pathway_list_outcome_sig %>%
+  dplyr::arrange(pathway)
+pathway_list_outcome_sig$pathway <- factor(pathway_list_outcome_sig$pathway,
+                                           levels = unique(pathway_list_outcome_sig$pathway))
+pathway_list_outcome_sig$mode <- factor(pathway_list_outcome_sig$mode,
+                                           levels = unique(pathway_list_outcome_sig$mode))
+pathway_list_outcome_sig <- pathway_list_outcome_sig %>%
+  dplyr::group_by(pathway) %>%
+  dplyr::mutate(pvalue_ave = mean(`p-value`),
+                sig_prop_ave = mean(sig_prop),
+                overlap_size_ave = ceiling(mean(overlap_size)))
+
+pathway_list_outcome_sig_input <- pathway_list_outcome_sig %>%
+  dplyr::group_by(pathway) %>%
+  dplyr::slice(1)
+
+pathway_list_outcome_sig_input <- pathway_list_outcome_sig_input %>% 
+  dplyr::mutate(
+    class = case_when(
+      pathway %in% pathway_class$lipid ~ "Lipid Metabolism",
+      pathway %in% pathway_class$AA ~ "Amino Acid Metabolism",
+      pathway %in% pathway_class$vita ~ "Metabolism of Cofactor and Vitamins",
+      TRUE ~ "Others"
+    )
+  )
+
+p4b <- ggplot(pathway_list_outcome_sig_input, aes(x = pathway, y = -log(pvalue_ave))) +
+  geom_point(aes(size = overlap_size_ave)) +
+  geom_hline(yintercept = -log(0.05), linetype="dashed", color = "red") +
+  scale_size_continuous(range=c(1,5)) +
+  xlab(NULL) +
+  ylab(expression(-log(italic("p")))) +
+  facet_grid(class ~ .,
+             scales = "free_y",
+             space = "free") +
+  coord_flip() +
+  theme_classic() +
+  theme(legend.title.align = 0,
+        legend.position = "bottom",
+        legend.justification = "left",
+        legend.text = element_text(size=10),
+        legend.title = element_text(size=10),
+        text = element_text(size = 11, color = "black", family = "sans"),
+        axis.text = element_text(size = 10),
+        axis.line.x = element_line(arrow = arrow(angle = 30, type = "open", length = unit(0.1, "inches"))),
+        axis.line.y = element_line(color = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill="grey95"),
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text.y = element_text(size = 11, angle = 0, hjust = 0)) +
+  guides(size = guide_legend(title = "N. of significant metabolites"))
+```
+
+#### Combined
+
+```{r}
+#| eval: false
+
+plot_grid(
+  p,
+  p4b,
+  ncol = 1,
+  rel_heights = c(1,1)
+)
+
+ggsave(
+  fs::path(
+    dir_figure,
+    "Figure S2.png"
+  ),
+  width = 8, height = 8, units = "in"
+)
+```
+
+### Figure S3
+
+```{r}
+load(fs::path(dir_temp_data, "model_statistics_DDE_baselinebmi.RData"))
+
+# Extract statistics of annotated features
+lmm_output_annot_l_DDE <- {}
+for(i in 1:length(platforms))
+{
+  lmm_output_annot <- lmm_random_intercept_knot1_covars_DDE_output[[i]] %>%
+    dplyr::filter(grepl(paste(feat_annot_l[[i]]$`colnames(x)`, collapse = "|"), row_name))
+  chem_name <- feat_annot_l[[i]]$Metabolite_Name[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+  standard_class <- feat_annot_l[[i]]$Standard_class[match(lmm_output_annot$row_name, feat_annot_l[[i]]$`colnames(x)`)]
+  lmm_output_annot <- Reduce(cbind, list(lmm_output_annot, chem_name, standard_class))
+  colnames(lmm_output_annot)[(dim(lmm_output_annot)[2]-1):dim(lmm_output_annot)[2]] <- c("chem_name", "standard_class")
+  lmm_output_annot_l_DDE[[i]] <- lmm_output_annot
+  rm(lmm_output_annot, chem_name)
+}
+names(lmm_output_annot_l_DDE) <- platforms
+```
+
+```{r}
+#| results: asis
+
+cat("**", "Number of features in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE, function(x) dim(x)[1]/6)
+cat("**", "Number of significant coefficients (q < ", q_cutoff_sig_feat, ") of product terms in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE,
+       function(x) table(x %>%
+                           filter(period != 0) %>%
+                           select(p_adjust) %>%
+                           unlist < q_cutoff_sig_feat))
+cat("**", "Number of significant interaction (q < ", q_cutoff_sig_feat, ") in each annotated feature table:", "**\n\n", sep = "")
+lapply(lmm_output_annot_l_DDE, function(x) table(x$p_adjust_interaction < q_cutoff_sig_feat))
+
+cat("**", platforms[4], "**\n\n", sep = "")
+output <- lmm_output_annot_l_DDE[[4]]
+
+sig_feat_by_q <- unique(output$row_name[which(output$p_adjust < q_cutoff_sig_feat)])
+sig_feat_by_q_inter <- unique(output$row_name[which(output$p_adjust_interaction < q_cutoff_sig_feat)])
+sig_feat <- union(sig_feat_by_q, sig_feat_by_q_inter)
+
+output_sig_feat <- output %>%
+  dplyr::filter(row_name %in% sig_feat | chem_name == "2-Methylbutyroylcarnitine") %>%
+  dplyr::filter(period != 0) %>% 
+  dplyr::filter(chem_name != "Pirimicarb")
+
+t_score <- qt(p = p_cutoff_sig_feat/2, df = 60-1, lower.tail = F)
+margin_error <- t_score*as.numeric(output_sig_feat$se)
+lower_bound <- as.numeric(output_sig_feat$coef) - margin_error
+upper_bound <- as.numeric(output_sig_feat$coef) + margin_error
+
+output_sig_feat$coef_num <- as.numeric(output_sig_feat$coef)
+output_sig_feat <- Reduce(cbind,
+                          list(output_sig_feat, lower_bound, upper_bound))
+colnames(output_sig_feat)[length(colnames(output_sig_feat))-1] <- "lower_bound"
+colnames(output_sig_feat)[length(colnames(output_sig_feat))] <- "upper_bound"
+
+output_sig_feat$chem_name_new <- ifelse(output_sig_feat$chem_name == "[C11.1]-Undecylenic acid", "Undecylenic acid", output_sig_feat$chem_name)
+output_sig_feat$p_adjust_asterisk <- ifelse(as.numeric(output_sig_feat$p_adjust) < 0.05, "Y", "")
+
+ggplot(output_sig_feat, 
+       aes(x = period, y = coef_num, fill = period, shape = p_adjust_asterisk)) +
+  geom_point(shape = 21, size = 4) +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound, color = period), width = 0.3, alpha= 0.7, linewidth = 1.5) +
+  geom_point(aes(y = upper_bound + 0.1),
+             position = position_dodge(0.9), 
+             show.legend = FALSE) +
+  scale_shape_manual(values = c(NA, 8)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("#377eb8", "#e41a1c")) +
+  scale_fill_manual(values = c("#377eb8", "#e41a1c")) +
+  ylab("Coefficients") +
+  xlab(NULL) +
+  facet_grid(~chem_name_new) +
+  coord_cartesian(clip = 'off',
+                  ylim = c(min(output_sig_feat$lower_bound), max(output_sig_feat$upper_bound))) +  
+  annotate(geom = "text", x = 1, y = -1.7,
+           label = TeX("$1^{st}$ year"), angle = "90", size = 4) +
+  annotate(geom = "text", x = 2, y = -1.7,
+           label = TeX("$1^{st}$-$3^{rd}$ year"), angle = "90", size = 4) +
+  theme_classic() +
+  theme(plot.margin = unit(c(1, 1, 6, 1), "lines"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        text = element_text(family="sans"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11),
+        axis.text.x = element_blank(),
+        axis.line = element_line(arrow = arrow(length = unit(0.25,"cm"))),
+        strip.text = element_text(size = 10),
+        legend.position = "none")
+
+ggsave(
+  fs::path(
+    dir_figure,
+    "Figure S3.png"
+  ), width = 10, height = 4.5, units = "in"
+)
+```
+
+```{r}
+output %>%
+  dplyr::filter(row_name %in% sig_feat | chem_name == "2-Methylbutyroylcarnitine") %>%
+  dplyr::group_by(chem_name) %>%
+  dplyr::select(chem_name, p_adjust_interaction, row_name, coef, period) %>% 
+  dplyr::filter(period == 0) %>% 
+  kbl() %>% 
+  kable_classic()
+```
+
+### Table S4
+
+```{r}
+lm_output_DDE_ATfeats %>% 
+  dplyr::mutate(
+    estimate_ci_AT = paste0(
+      create_two_digits(estimate),
+      " (",
+      create_two_digits(conf_low),
+      ", ",
+      create_two_digits(conf_high),
+      ")"
+    )
+  ) %>% 
+  dplyr::select(name_plot, estimate_ci_AT, p_value) %>% 
+  kbl() %>% 
+  kable_classic()
+    
+```
+
+### Figure S5 - Manhattan plots
+
+```{r}
+#| eval: false
+
+manhattan_wkpath <- fs::path(dir_temp_data, paste0("manhattan plot_", exposure))
+
+if(file.exists(manhattan_wkpath[4])){
+  do.call(function(x) unlink(x, recursive = T), list(list.files(manhattan_wkpath[4], full.names = T)))
+}else{
+  dir.create(manhattan_wkpath[4])
+}
+
+for(i in 1:length(lmm_random_intercept_knot1_covars_DDE_num_output))
+{
+  plot_input <- lmm_random_intercept_knot1_covars_DDE_num_output[[i]] %>%
+    dplyr::group_by(row_name) %>%
+    slice(1)
+  feat_mzrt <- data_plasma_metabo_mzrt[[i]]
+  plot_input <- cbind(feat_mzrt, plot_input)
+
+  windowsFonts(Times = windowsFont("Arial"))
+  par(mfcol = c(1,1),mar = numeric(4),oma = c(2.5,2,.5,.5),mgp = c(2,.6,0))
+  xvec = plot_input$rt
+  yvec = log10(plot_input$pvalue_interaction)*(-1)
+  qvec = plot_input$p_adjust_interaction
+  ylimit = c(0,max(yvec))
+  ythresh = -log10(0.05)
+  ythresh_q = yvec[which(plot_input$p_adjust_interaction == max(plot_input$p_adjust_interaction[plot_input$p_adjust_interaction < 0.05]))]
+  colorvec = c("red","black","blue","darkgreen")
+  pchvec = c(21,24)
+  xincrement = 50
+  yincrement = 1
+  background.points.col="gray50"
+
+  png(file = fs::path(manhattan_wkpath[[4]], paste0("manhattan_pvalueinteraction_by_rt_", platforms[i], ".png")),
+      width=550, height=325)
+  
+  min_lim<-min(0,xvec,na.rm = T)
+  max_val<-max(xvec,na.rm = T)
+  plot(xvec,yvec,xlab = NA,ylab = NA,xaxt="n",cex=0.4,cex.main=1.5,xlim = c(0,450),las=2,cex.axis = 1.5,axes = F,ylim = ylimit)
+  axis(2L,at = seq(0,ceiling(max(log10(plot_input$pvalue_interaction)*(-1)))),las = 2,cex.axis = 1.5)
+  axis(1L,at=seq(0, 450, by=xincrement) , las=2,cex.axis = 1.5)
+  points(xvec,yvec,col=background.points.col,bg=background.points.col,cex=0.4,pch=21)
+
+  sig_by_p <- which(yvec > ythresh)
+  sig_by_q <- which(qvec < 0.05)
+  abline(h = ythresh, col = colorvec[3], lty = "dashed")
+  abline(h = ythresh_q, col = colorvec[1], lty = "dashed")
+
+  for(i in setdiff(sig_by_p, sig_by_q))
+  {
+    points(xvec[i],yvec[i],col=colorvec[3],cex=1,pch=pchvec[1],bg=colorvec[3])
+  }
+  
+  for(i in sig_by_q)
+  {
+    points(xvec[i],yvec[i],col=colorvec[1],cex=1,pch=pchvec[1],bg=colorvec[1])
+  }
+  
+  dev.off()
+}
+```
